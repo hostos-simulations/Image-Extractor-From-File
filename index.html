@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Extractor Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h1>Image Extractor</h1>
+        <p class="subtitle">Extract images from PDF, DOCX, or PPTX</p>
+        
+        <div id="dropZone" class="drop-zone">
+            <div class="icon">📁</div>
+            <p>Drag & Drop your file here or <span class="browse">browse</span></p>
+            <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" hidden>
+        </div>
+
+        <div id="status" class="status">Waiting for file...</div>
+        
+        <div class="privacy-note">
+            <span class="shield">🛡️</span> 100% Private. Files are processed locally in your browser.
+        </div>
+
+        <div id="log" class="log-area"></div>
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
