@@ -6,7 +6,6 @@ const fileInput = document.getElementById('fileInput');
 const status = document.getElementById('status');
 const log = document.getElementById('log');
 
-// Event Listeners
 dropZone.onclick = () => fileInput.click();
 fileInput.onchange = (e) => handleFile(e.target.files[0]);
 
@@ -20,49 +19,49 @@ dropZone.ondrop = (e) => {
 
 async function handleFile(file) {
     if (!file) return;
-    
     const ext = file.name.split('.').pop().toLowerCase();
-    updateStatus(`Processing ${file.name}...`, "info");
+    updateStatus(`Analyzing ${file.name}...`);
     log.innerHTML = "";
     log.style.display = "block";
 
     try {
         if (ext === 'pdf') {
             await extractFromPDF(file);
-        } else if (ext === 'docx' || ext === 'pptx') {
-            await extractFromOffice(file, ext);
+        } else if (['docx', 'pptx', 'xlsx'].includes(ext)) {
+            await extractFromOffice(file);
         } else {
-            updateStatus("Unsupported file format.", "error");
+            updateStatus("Unsupported file format.");
         }
     } catch (err) {
         console.error(err);
-        updateStatus("Error during extraction.", "error");
+        updateStatus("Processing failed. The file might be encrypted or corrupted.");
     }
 }
 
-async function extractFromOffice(file, ext) {
+// Robust Office Extraction: Scans all internal files for image extensions
+async function extractFromOffice(file) {
     const zip = await JSZip.loadAsync(file);
     const outputZip = new JSZip();
     let count = 0;
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'emf', 'wmf', 'svg', 'tiff'];
 
-    // Word uses 'word/media/', PPT uses 'ppt/media/'
-    const mediaPath = ext === 'docx' ? 'word/media/' : 'ppt/media/';
-    
     for (const [path, zipEntry] of Object.entries(zip.files)) {
-        if (path.startsWith(mediaPath)) {
+        const fileExt = path.split('.').pop().toLowerCase();
+        if (imageExtensions.includes(fileExt)) {
             const blob = await zipEntry.async("blob");
             const fileName = path.split('/').pop();
-            outputZip.file(`extracted_${fileName}`, blob);
-            addLog(`Found image: ${fileName}`);
+            outputZip.file(`img_${count}_${fileName}`, blob);
+            addLog(`Extracted: ${fileName}`);
             count++;
         }
     }
     finalize(outputZip, count, file.name);
 }
 
+// Deep Scan PDF Extraction
 async function extractFromPDF(file) {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+    const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
     const outputZip = new JSZip();
     let count = 0;
 
@@ -70,29 +69,58 @@ async function extractFromPDF(file) {
         const page = await pdf.getPage(i);
         const ops = await page.getOperatorList();
         
+        // Find all Image Object keys
+        const imageKeys = [];
         for (let j = 0; j < ops.fnArray.length; j++) {
-            // Check if operator is an image
-            if (ops.fnArray[j] === pdfjsLib.OPS.paintImageXObject || ops.fnArray[j] === pdfjsLib.OPS.paintJpegXObject) {
-                const imgName = ops.argsArray[j][0];
-                try {
-                    const img = await page.objs.get(imgName);
-                    
-                    // Render PDF image data to canvas to convert to PNG
+            const fn = ops.fnArray[j];
+            if (fn === pdfjsLib.OPS.paintImageXObject || 
+                fn === pdfjsLib.OPS.paintJpegXObject || 
+                fn === pdfjsLib.OPS.paintInlineImageXObject) {
+                imageKeys.push(ops.argsArray[j][0]);
+            }
+        }
+
+        // Process unique keys found on this page
+        const uniqueKeys = [...new Set(imageKeys)];
+        for (const key of uniqueKeys) {
+            try {
+                // PDF.js uses a callback for object resolution
+                const img = await new Promise((resolve) => {
+                    page.objs.get(key, (obj) => resolve(obj));
+                });
+
+                if (img && (img.data || img.bitmap)) {
                     const canvas = document.createElement('canvas');
                     canvas.width = img.width;
                     canvas.height = img.height;
                     const ctx = canvas.getContext('2d');
-                    const imgData = ctx.createImageData(img.width, img.height);
-                    imgData.data.set(img.data);
-                    ctx.putImageData(imgData, 0, 0);
-                    
+
+                    if (img.bitmap) {
+                        // Newer PDF.js versions might return a ImageBitmap
+                        ctx.drawImage(img.bitmap, 0, 0);
+                    } else {
+                        const imgData = ctx.createImageData(img.width, img.height);
+                        // Convert RGB to RGBA if necessary
+                        if (img.data.length === img.width * img.height * 3) {
+                            const rgba = new Uint8ClampedArray(img.width * img.height * 4);
+                            for (let k = 0, l = 0; k < img.data.length; k += 3, l += 4) {
+                                rgba[l] = img.data[k]; rgba[l+1] = img.data[k+1];
+                                rgba[l+2] = img.data[k+2]; rgba[l+3] = 255;
+                            }
+                            imgData.data.set(rgba);
+                        } else {
+                            imgData.data.set(img.data);
+                        }
+                        ctx.putImageData(imgData, 0, 0);
+                    }
+
                     const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-                    outputZip.file(`page${i}_img${j}.png`, blob);
-                    addLog(`Extracted image from page ${i}`);
+                    outputZip.file(`page${i}_img${count}.png`, blob);
+                    addLog(`Page ${i}: Extracted image ${count}`);
                     count++;
-                } catch (e) {
-                    addLog(`Skipped specialized image on page ${i}`);
                 }
+            } catch (e) {
+                addLog(`Page ${i}: Skipped an unreadable image format.`);
             }
         }
     }
@@ -110,14 +138,13 @@ function addLog(msg) {
 
 async function finalize(zip, count, originalName) {
     if (count === 0) {
-        updateStatus("No images found.");
+        updateStatus("No extractable images found in this file.");
         return;
     }
-
     const content = await zip.generateAsync({type: "blob"});
     const link = document.createElement('a');
     link.href = URL.createObjectURL(content);
-    link.download = `images_from_${originalName.split('.')[0]}.zip`;
+    link.download = `extracted_images_${originalName.split('.')[0]}.zip`;
     link.click();
-    updateStatus(`Successfully extracted ${count} images!`);
+    updateStatus(`Success! Downloaded ${count} images.`);
 }
